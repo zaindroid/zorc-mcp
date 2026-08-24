@@ -1,0 +1,7 @@
+tunnel: your-tunnel-id
+credentials-file: /etc/cloudflared/your-tunnel-id.json
+
+ingress:
+  - hostname: mcp.example.com
+    service: http://localhost:8081
+  - service: http_status:404

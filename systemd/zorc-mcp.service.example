@@ -1,0 +1,21 @@
+[Unit]
+Description=zorc MCP server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/zorc/.venv/bin/uvicorn mcp_server:app --host 127.0.0.1 --port 8081 --app-dir /opt/zorc/deploy
+WorkingDirectory=/opt/zorc/deploy
+User=zorc
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/zorc /etc/cloudflared
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

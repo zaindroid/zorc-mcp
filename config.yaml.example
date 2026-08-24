@@ -1,0 +1,32 @@
+# Copy this file to config.yaml and fill in the values for your own setup.
+# Nothing in this file is a secret by itself -- API tokens live in
+# deploy/secrets/ instead (see docs/setup.md).
+
+# The domain apps get deployed under, e.g. an app named "hello" becomes
+# hello.example.com. Must be a domain you control in Cloudflare.
+root_domain: example.com
+
+# Your Coolify instance's API base URL. If Coolify runs on the same
+# machine as zorc, this is usually http://localhost:8000/api/v1.
+coolify_url: http://localhost:8000/api/v1
+
+# Coolify project and environment to deploy apps into. Create a project
+# in the Coolify UI first, open it, and copy the UUIDs from the URL.
+coolify_project_uuid: ""
+coolify_environment_uuid: ""
+coolify_environment_name: production
+
+# Cloudflare account and zone for root_domain, and the tunnel that
+# routes traffic to this machine. See docs/setup.md for how to create
+# these if you don't have them yet.
+cloudflare_account_id: ""
+cloudflare_zone_id: ""
+cloudflare_tunnel_id: ""
+
+# Name of the machine zorc itself runs on, matching an entry in
+# registry.yaml's nodes section.
+local_node: local
+
+# Soft per-owner memory budget, in MB, used when registry.yaml's
+# owner_budgets section doesn't set its own default.
+owner_budget_default_mb: 8192

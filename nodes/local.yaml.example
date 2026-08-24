@@ -1,0 +1,15 @@
+# Self-reported hardware/health data for the "local" node, kept separate
+# from registry.yaml's human-set policy. Optional -- only needed if you
+# want architecture/GPU-aware placement. Copy to nodes/local.yaml and
+# adjust, or generate it with a small script that runs on the machine
+# itself.
+arch: x86_64
+status: online
+last_seen: "2026-01-01T00:00:00+00:00"
+accelerator:
+  type: cuda
+  name: ""
+  vram_mb: 0
+  count: 0
+labels:
+  - always-on

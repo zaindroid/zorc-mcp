@@ -1,0 +1,5 @@
+httpx==0.28.1
+PyYAML==6.0.3
+mcp==2.0.0
+uvicorn==0.52.1
+starlette==1.6.0

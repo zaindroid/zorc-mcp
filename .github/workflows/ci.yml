@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r deploy/requirements.txt
+      - name: fixture config
+        run: |
+          cat > config.yaml <<EOF
+          root_domain: test.example.com
+          coolify_url: http://localhost:8000/api/v1
+          coolify_project_uuid: test-project
+          coolify_environment_uuid: test-env
+          cloudflare_account_id: test-account
+          cloudflare_zone_id: test-zone
+          cloudflare_tunnel_id: test-tunnel
+          local_node: local
+          EOF
+          python3 scripts/mint_token.py ci-test admin
+      - run: |
+          for f in scripts/test_*.py; do
+            echo "=== $f ==="
+            python3 "$f"
+          done

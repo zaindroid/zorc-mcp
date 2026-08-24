@@ -1,0 +1,27 @@
+# Single source of truth for what exists on this platform. Copy this
+# file to registry.yaml and adjust the node entry for your own machine.
+#
+# Every app gets an entry here, added automatically by deploy(). Budget
+# is enforced per node -- an app on one machine has zero effect on
+# another's headroom.
+
+nodes:
+  local:
+    total_memory_mb: 16000
+    reserved_mb: 2000
+    usable_mb: 14000
+    max_utilisation: 0.80
+    server_uuid: ""
+    has_public_ip: false
+    provider: self-hosted
+    backend: coolify
+    is_control_plane: true
+
+owner_budgets:
+  default_mb: 8192
+  overrides: {}
+
+# ---------------------------------------------------------------------------
+# Applications. Add new entries at the end. Keep alphabetical within groups.
+# ---------------------------------------------------------------------------
+apps:

@@ -1,0 +1,13 @@
+*.key
+*.pem
+*_ed25519
+*_rsa
+.env
+.env.*
+deploy/secrets/
+*.bak
+__pycache__/
+.venv/
+config.yaml
+deploy/mcp_audit.log
+deploy/pending_actions.json
