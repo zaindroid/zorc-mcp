@@ -142,7 +142,7 @@ def setup_project(coolify_url: str, headers: dict) -> tuple[str, str]:
             return proj_uuid, env_uuid
 
     # The list endpoint above doesn't include environments -- only the
-    # per-project detail endpoint does, confirmed live.
+    # per-project detail endpoint does.
     r = httpx.get(f"{coolify_url}/projects/{proj_uuid}", headers=headers, timeout=10)
     r.raise_for_status()
     envs = r.json().get("environments") or []
