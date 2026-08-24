@@ -159,7 +159,14 @@ def add_pages_custom_domain(project_name: str, domain: str) -> None:
 
 
 def load_registry() -> dict:
-    return yaml.safe_load(REGISTRY_PATH.read_text())
+    reg = yaml.safe_load(REGISTRY_PATH.read_text()) or {}
+    # A bare "apps:" line with nothing under it (the state of a freshly
+    # generated registry.yaml, before the first app exists) parses as
+    # None, not []. Normalize here once so every .get("apps", []) call
+    # elsewhere actually gets a list, not a crash.
+    if reg.get("apps") is None:
+        reg["apps"] = []
+    return reg
 
 
 def node_config(node_name: str) -> dict:

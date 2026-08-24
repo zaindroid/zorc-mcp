@@ -1,74 +1,105 @@
 # Setup
 
-## 1. Install Coolify
+## The wizard
 
-Coolify does the actual container building and running. Install it on
-the machine you want to deploy to, following
-[Coolify's own install docs](https://coolify.io/docs/get-started/installation).
-Once it's running, log into its UI, create a project, and open it -- the
-project and environment UUIDs are in the URL, you'll need them below.
+```
+git clone https://github.com/zaindroid/zorc-mcp
+cd zorc-mcp
+python3 scripts/setup.py
+```
 
-## 2. Get a Coolify API token
+It bootstraps its own virtualenv on first run, then walks through:
 
-Coolify UI -> Keys & Tokens -> create a token with API access. Save it:
+1. **Coolify.** If it's not already running on this machine, offers to
+   install it (runs Coolify's own official installer). You'll need to
+   open its web UI once and create your admin account before continuing
+   -- that first-run step has no API, it has to be done by hand.
+2. **Coolify API token.** Coolify UI -> Keys & Tokens -> create one with
+   API access, paste it in.
+3. **Coolify project.** Picks your first existing project, or creates
+   one named "zorc" if you don't have one yet.
+4. **Domain + Cloudflare API token.** The domain you'll deploy apps
+   under (must already be on Cloudflare), and a token with at least
+   Zone:DNS:Edit for it.
+5. **cloudflared.** Installs it if missing, runs `cloudflared tunnel
+   login` (opens a browser -- this step is unavoidably interactive,
+   Cloudflare doesn't offer a non-interactive way to authorize a new
+   tunnel), then creates a tunnel and writes `cloudflared/config.yml`.
+6. **registry.yaml / config.yaml.** Detects this machine's real memory,
+   writes both files.
+7. **zorc-mcp itself.** Mints your first admin token, installs and
+   starts the systemd service.
+
+Re-run it any time -- every step checks whether it's already done
+before doing it again.
+
+At the end it prints the URL and token to point your coding agent's MCP
+client at.
+
+## Adding more machines later
+
+Each additional machine is another entry in `registry.yaml`'s `nodes:`
+section. `backend: coolify` if Coolify is installed there too;
+`backend: zorc-agent` for a lighter machine that only has Docker --
+zorc deploys to it directly over SSH, no Coolify needed on that one.
+The wizard only sets up the first machine; add others by hand following
+the shape of the `local` entry it wrote.
+
+## Doing it by hand instead
+
+Not on Linux, or want to configure a piece yourself rather than let the
+wizard do it -- everything below is what the wizard automates.
+
+### Coolify
+
+Install from [Coolify's own docs](https://coolify.io/docs/get-started/installation).
+Create a project in the UI, open it -- the project and environment
+UUIDs are in the URL. Create an API token (Keys & Tokens) and save it:
 
 ```
 mkdir -p deploy/secrets
 echo '{"token": "your-coolify-token"}' > deploy/secrets/coolify.json
 ```
 
-## 3. Set up Cloudflare Tunnel
-
-This is what makes "no VPS, no open ports" work: cloudflared runs on the
-same machine as Coolify and creates an outbound-only tunnel, so apps
-become reachable at a real domain without you exposing anything to the
-internet directly.
+### Cloudflare Tunnel
 
 1. Add your domain to Cloudflare if it isn't already.
-2. `cloudflared tunnel create zorc` (or via the Cloudflare dashboard) --
+2. `cloudflared tunnel login`, then `cloudflared tunnel create zorc` --
    note the tunnel ID it prints.
 3. `cp cloudflared/config.yml.example cloudflared/config.yml`, fill in
    the tunnel ID and the credentials file path it printed.
-4. Install cloudflared as a system service pointing at that config
-   (`cloudflared service install`, or your distro's equivalent).
-5. Get your Cloudflare account ID and zone ID from the dashboard
-   (Overview page for your domain, right-hand sidebar).
-6. Save your Cloudflare API token (needs Zone:DNS:Edit permission):
+4. `cloudflared service install`, pointed at that config.
+5. Get your account ID and zone ID from the Cloudflare dashboard
+   (domain Overview page, right sidebar).
+6. Save an API token with Zone:DNS:Edit:
 
 ```
 echo '{"token": "your-cloudflare-token"}' > deploy/secrets/cloudflare.json
 ```
 
-## 4. Configure zorc
+### zorc itself
 
 ```
 cp config.yaml.example config.yaml
 cp registry.yaml.example registry.yaml
 ```
 
-Fill in `config.yaml`: your domain, Coolify's URL and project/environment
-UUIDs from step 1, your Cloudflare account/zone/tunnel IDs from step 3,
-and `local_node` (a name for this machine -- must match the key you use
-in `registry.yaml`'s `nodes:` section).
-
+Fill in `config.yaml` with the values from the two sections above.
 Adjust `registry.yaml`'s `local` node entry to match this machine's real
-memory -- `total_memory_mb` is the machine's actual RAM,
-`server_uuid` is Coolify's UUID for this server (Coolify UI -> Servers).
-
-## 5. Install and run
+memory and Coolify server UUID (Coolify UI -> Servers).
 
 ```
 pip install -r deploy/requirements.txt
 python3 scripts/mint_token.py <your-name> admin
 ```
 
-Store the printed token -- it's shown once. Then either run directly:
+Then either run directly:
 
 ```
 cd deploy && uvicorn mcp_server:app --host 127.0.0.1 --port 8081
 ```
 
-or install the systemd unit for it to survive reboots:
+or install the systemd unit:
 
 ```
 cp systemd/zorc-mcp.service.example /etc/systemd/system/zorc-mcp.service
@@ -77,22 +108,14 @@ systemctl daemon-reload && systemctl enable --now zorc-mcp
 ```
 
 Add `mcp.<your-domain>` to your tunnel's ingress rules pointing at
-`http://localhost:8081`, matching the pattern already in
-`cloudflared/config.yml.example`.
+`http://localhost:8081`.
 
-## 6. Point your coding agent at it
+## Point your coding agent at it
 
 Any MCP-capable agent, configured with:
 
 - URL: `https://mcp.<your-domain>/mcp`
-- Header: `Authorization: Bearer <token from step 5>`
+- Header: `Authorization: Bearer <token from setup>`
 
 Call `get_platform_contract()` first to see what it expects from an app,
 then `analyze_deployment_requirements()` before every `deploy()`.
-
-## Adding more machines later
-
-Each additional machine is another entry in `registry.yaml`'s `nodes:`
-section. `backend: coolify` if Coolify is installed there too;
-`backend: zorc-agent` for a lighter machine that only has Docker --
-zorc deploys to it directly over SSH, no Coolify needed on that one.

@@ -2,6 +2,7 @@
 """test_owner_budgets.py — Phase 5 pipeline test (soft per-owner memory
 budgets)."""
 import sys
+import tempfile
 from pathlib import Path
 
 ZORC_DIR = Path(__file__).resolve().parent.parent
@@ -127,12 +128,46 @@ def test_analyze_deployment_requirements_budget_gate(agent, m) -> None:
         __import__("shutil").rmtree = original["rmtree"]
 
 
+def test_fresh_registry_with_no_apps_yet(agent) -> None:
+    """A bare "apps:" with nothing under it (the real, exact shape of a
+    freshly generated registry.yaml, before the first app is ever
+    deployed) parses as apps=None, not apps=[] -- this used to crash the
+    very first call any new install ever made. Written against a real
+    file and the real load_registry(), not a mocked-out dict."""
+    fixture = Path(tempfile.mktemp(suffix=".yaml"))
+    fixture.write_text(
+        "nodes:\n"
+        "  local:\n"
+        "    total_memory_mb: 16000\n"
+        "    reserved_mb: 2000\n"
+        "    usable_mb: 14000\n"
+        "    max_utilisation: 0.8\n"
+        "owner_budgets:\n"
+        "  default_mb: 8192\n"
+        "  overrides: {}\n"
+        "apps:"
+    )
+    original_path = agent.REGISTRY_PATH
+    try:
+        agent.REGISTRY_PATH = fixture
+        reg = agent.load_registry()
+        check("a bare apps: line loads as an empty list, not None", reg["apps"] == [], f"got {reg['apps']!r}")
+        check("budget_headroom_mb works against it", agent.budget_headroom_mb("local") == 11200.0,
+              f"got {agent.budget_headroom_mb('local')}")
+        check("owner_memory_total_mb works against it", agent.owner_memory_total_mb("anyone") == 0)
+        check("name_taken works against it", agent.name_taken("anything") is False)
+    finally:
+        agent.REGISTRY_PATH = original_path
+        fixture.unlink(missing_ok=True)
+
+
 def main() -> int:
     import agent
     import mcp_server as m
 
     test_owner_memory_total_and_budget(agent)
     test_analyze_deployment_requirements_budget_gate(agent, m)
+    test_fresh_registry_with_no_apps_yet(agent)
 
     print()
     if FAILURES:
