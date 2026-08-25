@@ -43,6 +43,18 @@ RESTART_RATE_LIMIT = 10
 RESTART_RATE_WINDOW_SEC = 3600
 _restart_timestamps: deque[float] = deque()
 
+SET_ENV_RATE_LIMIT = 10
+SET_ENV_RATE_WINDOW_SEC = 3600
+_set_env_timestamps: deque[float] = deque()
+
+MINT_TOKEN_RATE_LIMIT = 5
+MINT_TOKEN_RATE_WINDOW_SEC = 3600
+_mint_token_timestamps: deque[float] = deque()
+
+REVOKE_TOKEN_RATE_LIMIT = 5
+REVOKE_TOKEN_RATE_WINDOW_SEC = 3600
+_revoke_token_timestamps: deque[float] = deque()
+
 TEARDOWN_REQUEST_RATE_LIMIT = 5
 TEARDOWN_REQUEST_RATE_WINDOW_SEC = 3600
 _teardown_request_timestamps: deque[float] = deque()
@@ -864,6 +876,55 @@ def restart(ctx: Context, name: str) -> dict:
         return outcome
 
 
+@mcp.tool()
+def set_app_env_vars(ctx: Context, name: str, env_vars: dict[str, str]) -> dict:
+    """Sets or updates env vars on an app you own (or any app, if you're
+    admin), then redeploys so it actually reaches the running container.
+    deploy() only ever creates a new app and redeploy()/restart() reuse
+    whatever env vars Coolify already has, unchanged -- this is the only
+    tool that can change one. Same trust tier as redeploy()/restart():
+    owner-or-admin, immediate, no approval gate -- an owner can already
+    redeploy/restart their own app without one, and this changes strictly
+    less than a full redeploy. Values are never logged, only which keys
+    were touched."""
+    caller = _caller_identity(ctx)
+    params = {"name": name, "keys": sorted((env_vars or {}).keys())}
+
+    gate = _require_owner_or_admin(caller, name)
+    if not gate["ok"]:
+        _audit("set_app_env_vars", params, gate, client=caller)
+        return gate
+
+    if not env_vars:
+        outcome = {"status": "rejected", "reason": "env_vars must not be empty"}
+        _audit("set_app_env_vars", params, outcome, client=caller)
+        return outcome
+
+    now = time.time()
+    while _set_env_timestamps and now - _set_env_timestamps[0] > SET_ENV_RATE_WINDOW_SEC:
+        _set_env_timestamps.popleft()
+    if len(_set_env_timestamps) >= SET_ENV_RATE_LIMIT:
+        outcome = {"status": "rejected",
+                   "reason": f"rate limit: {SET_ENV_RATE_LIMIT} env var updates per "
+                             f"{SET_ENV_RATE_WINDOW_SEC}s exceeded"}
+        _audit("set_app_env_vars", params, outcome, client=caller)
+        return outcome
+
+    try:
+        result = agent.set_app_env_vars(name, env_vars)
+        _set_env_timestamps.append(now)
+        outcome = {"status": "updated", "keys": result["keys"]}
+        _audit("set_app_env_vars", params, outcome, client=caller)
+        return outcome
+    except ValueError as e:
+        outcome = {"status": "rejected", "reason": str(e)}
+        _audit("set_app_env_vars", params, outcome, client=caller)
+        return outcome
+    except Exception as e:
+        outcome = {"status": "failed", "reason": str(e)}
+        _audit("set_app_env_vars", params, outcome, client=caller)
+        return outcome
+
 
 def _load_pending_actions() -> dict:
     if not PENDING_ACTIONS_PATH.exists():
@@ -1130,6 +1191,132 @@ def reject_action(ctx: Context, id: str) -> dict:
     _audit("reject_action", params, outcome, client=caller)
     return outcome
 
+
+
+def _write_token_map(token_map: dict) -> None:
+    MCP_TOKEN_PATH.write_text(json.dumps(token_map, indent=2) + "\n")
+    _TOKEN_CACHE["mtime"] = None  # force _load_token_map() to reread on next call
+
+
+@mcp.tool()
+def list_clients(ctx: Context) -> dict:
+    """Lists every client with a bearer token -- name and role only,
+    never the token or its hash. Any authenticated caller can see this
+    (matches mint_client_token() not being role-gated). Read-only, not
+    rate-limited."""
+    _caller_identity(ctx)  # still must resolve to a real, valid token
+    try:
+        token_map = _load_token_map()
+    except Exception as e:
+        return {"status": "rejected", "reason": f"token map is currently unreadable: {e}"}
+    clients = sorted(
+        ({"name": info["name"], "role": info["role"]} for info in token_map.values()),
+        key=lambda c: c["name"],
+    )
+    return {"clients": clients}
+
+
+@mcp.tool()
+def mint_client_token(ctx: Context, name: str, role: Literal["admin", "client"]) -> dict:
+    """Mints (or rotates) a bearer token for one client -- the
+    self-service replacement for running scripts/mint_token.py by hand.
+    Not admin-gated, deliberately: reaching this server at all already
+    requires holding a valid token -- that's the real trust boundary, not
+    an extra role check on top of it. Returns the raw token ONCE, in this
+    response -- it is never stored, logged, or retrievable again; if it's
+    lost, mint again. Rotating an existing name replaces only that
+    client's token, everyone else is untouched. Rate-limited and audited
+    -- the raw token is never written to the audit log."""
+    caller = _caller_identity(ctx)
+    params = {"name": name, "role": role}
+    name = (name or "").strip()
+    if not name:
+        outcome = {"status": "rejected", "reason": "name must not be empty"}
+        _audit("mint_client_token", params, outcome, client=caller)
+        return outcome
+
+    now = time.time()
+    while _mint_token_timestamps and now - _mint_token_timestamps[0] > MINT_TOKEN_RATE_WINDOW_SEC:
+        _mint_token_timestamps.popleft()
+    if len(_mint_token_timestamps) >= MINT_TOKEN_RATE_LIMIT:
+        outcome = {"status": "rejected",
+                   "reason": f"rate limit: {MINT_TOKEN_RATE_LIMIT} mints per "
+                             f"{MINT_TOKEN_RATE_WINDOW_SEC}s exceeded"}
+        _audit("mint_client_token", params, outcome, client=caller)
+        return outcome
+
+    try:
+        token_map = _load_token_map()
+    except Exception:
+        token_map = {}
+    before = len(token_map)
+    token_map = {h: info for h, info in token_map.items() if info.get("name") != name}
+    replaced = len(token_map) < before
+
+    token = secrets_module.token_hex(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_map[token_hash] = {"name": name, "role": role}
+    _write_token_map(token_map)
+
+    _mint_token_timestamps.append(now)
+    outcome = {"status": "rotated" if replaced else "minted", "name": name, "role": role}
+    _audit("mint_client_token", params, outcome, client=caller)
+    return {**outcome, "token": token}
+
+
+@mcp.tool()
+def revoke_client_token(ctx: Context, name: str) -> dict:
+    """Removes a client's token entirely -- ADMIN ONLY, unlike minting.
+    Taking access away is a different, less recoverable direction than
+    granting it. Not a rotation: that name has no valid token afterward
+    until mint_client_token() is called for it again. Refuses to remove
+    the last remaining admin -- that would lock everyone out with no way
+    back in short of shell access. Rate-limited and audited."""
+    caller = _caller_identity(ctx)
+    params = {"name": name}
+    if caller.get("role") != "admin":
+        outcome = {"status": "rejected", "reason": "revoke_client_token is admin-only"}
+        _audit("revoke_client_token", params, outcome, client=caller)
+        return outcome
+
+    now = time.time()
+    while _revoke_token_timestamps and now - _revoke_token_timestamps[0] > REVOKE_TOKEN_RATE_WINDOW_SEC:
+        _revoke_token_timestamps.popleft()
+    if len(_revoke_token_timestamps) >= REVOKE_TOKEN_RATE_LIMIT:
+        outcome = {"status": "rejected",
+                   "reason": f"rate limit: {REVOKE_TOKEN_RATE_LIMIT} revocations per "
+                             f"{REVOKE_TOKEN_RATE_WINDOW_SEC}s exceeded"}
+        _audit("revoke_client_token", params, outcome, client=caller)
+        return outcome
+
+    try:
+        token_map = _load_token_map()
+    except Exception as e:
+        outcome = {"status": "rejected", "reason": f"token map is currently unreadable: {e}"}
+        _audit("revoke_client_token", params, outcome, client=caller)
+        return outcome
+
+    matching = {h: info for h, info in token_map.items() if info.get("name") == name}
+    if not matching:
+        outcome = {"status": "rejected", "reason": f"no token for {name!r}"}
+        _audit("revoke_client_token", params, outcome, client=caller)
+        return outcome
+
+    remaining_admins = sum(1 for h, info in token_map.items()
+                            if info.get("role") == "admin" and h not in matching)
+    if any(info.get("role") == "admin" for info in matching.values()) and remaining_admins == 0:
+        outcome = {"status": "rejected",
+                   "reason": f"{name!r} is the last remaining admin -- revoking it would lock everyone out"}
+        _audit("revoke_client_token", params, outcome, client=caller)
+        return outcome
+
+    new_map = {h: info for h, info in token_map.items() if info.get("name") != name}
+    _write_token_map(new_map)
+
+    _revoke_token_timestamps.append(now)
+    outcome = {"status": "revoked", "name": name}
+    _audit("revoke_client_token", params, outcome, client=caller)
+    return outcome
 
 
 _TOKEN_CACHE: dict = {"mtime": None, "map": {}}

@@ -26,6 +26,8 @@ jobs:
           cloudflare_tunnel_id: test-tunnel
           local_node: local
           EOF
+          mkdir -p deploy/secrets
+          echo '{"token": "fake"}' > deploy/secrets/coolify.json
           python3 scripts/mint_token.py ci-test admin
       - run: |
           for f in scripts/test_*.py; do

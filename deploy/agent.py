@@ -661,16 +661,32 @@ def create_coolify_app(*, name: str, git_repository: str, git_branch: str,
 
 
 def set_coolify_env_vars(coolify_uuid: str, vars_to_set: dict[str, str]) -> None:
-    """Pushes each {key: value} to Coolify as a runtime env var on the
-    given application."""
+    """Upserts each {key: value} as a runtime env var on the given
+    application. Coolify 409s a POST for a key that already exists (must
+    PATCH instead), and keeps a separate preview-environment copy of
+    every var -- POST creates both copies from one call, PATCH only
+    touches the is_preview value in the request, so an update issues two
+    PATCH calls or the copies drift apart."""
     with httpx.Client(timeout=30) as client:
+        existing = client.get(f"{COOLIFY_URL}/applications/{coolify_uuid}/envs", headers=_coolify_headers())
+        existing.raise_for_status()
+        existing_keys = {e["key"] for e in existing.json()}
         for key, value in vars_to_set.items():
-            r = client.post(
-                f"{COOLIFY_URL}/applications/{coolify_uuid}/envs",
-                headers=_coolify_headers(),
-                json={"key": key, "value": value, "is_preview": False},
-            )
-            r.raise_for_status()
+            if key in existing_keys:
+                for is_preview in (False, True):
+                    r = client.patch(
+                        f"{COOLIFY_URL}/applications/{coolify_uuid}/envs",
+                        headers=_coolify_headers(),
+                        json={"key": key, "value": value, "is_preview": is_preview},
+                    )
+                    r.raise_for_status()
+            else:
+                r = client.post(
+                    f"{COOLIFY_URL}/applications/{coolify_uuid}/envs",
+                    headers=_coolify_headers(),
+                    json={"key": key, "value": value, "is_preview": False},
+                )
+                r.raise_for_status()
 
 
 def add_coolify_persistent_storage(coolify_uuid: str, name: str, mount_path: str) -> None:
@@ -1591,6 +1607,33 @@ def resize_app_memory(name: str, new_memory_mb: int) -> dict:
 
     return {"resized": name, "old_memory_mb": old_memory_mb, "new_memory_mb": new_memory_mb,
             "target_node": target_node, "coolify_uuid": coolify_uuid}
+
+
+def set_app_env_vars(name: str, env_vars: dict[str, str]) -> dict:
+    """Sets or updates env vars on an EXISTING, already-registered app,
+    then redeploys so it actually reaches the running container. Not
+    restricted to keys app.yaml declares -- an operational tool, not a
+    re-run of deploy()'s declared-env resolution. Coolify apps only,
+    same scope as redeploy()/resize_app_memory()."""
+    if not name_taken(name):
+        raise ValueError(f"{name!r} is not a registered app -- nothing to update")
+    if not env_vars:
+        raise ValueError("env_vars must not be empty")
+    mapped = _load_resource_map().get(name, {})
+    kind = mapped.get("kind")
+    if kind != "coolify":
+        raise ValueError(
+            f"{name!r} is a {kind!r} app -- set_app_env_vars() only supports single-container "
+            "Coolify apps (kind 'coolify') right now"
+        )
+    coolify_uuid = mapped.get("coolify_uuid")
+    if not coolify_uuid:
+        raise ValueError(f"{name!r} has no recorded coolify_uuid in resource_map.json -- cannot update")
+
+    set_coolify_env_vars(coolify_uuid, env_vars)
+    trigger_coolify_deploy(coolify_uuid)
+
+    return {"updated": name, "keys": sorted(env_vars.keys()), "coolify_uuid": coolify_uuid}
 
 
 def remove_registry_entry(name: str) -> None:
