@@ -110,6 +110,16 @@ systemctl daemon-reload && systemctl enable --now zorc-mcp
 Add `mcp.<your-domain>` to your tunnel's ingress rules pointing at
 `http://localhost:8081`.
 
+## Rate limits
+
+Every mutating tool (deploy, redeploy, restart, teardown requests,
+memory increases, env var updates, token minting/revocation) is
+rate-limited by default, platform-wide. Set
+`ZORC_MCP_RATE_LIMITS_DISABLED=1` in the systemd unit's `[Service]`
+section (or the environment zorc-mcp runs in generally) to turn all of
+them off at once without removing the mechanism -- ownership checks and
+auth are unaffected either way.
+
 ## Point your coding agent at it
 
 Any MCP-capable agent, configured with:

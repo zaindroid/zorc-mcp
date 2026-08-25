@@ -31,6 +31,26 @@ PENDING_ACTIONS_PATH = Path(os.environ.get("ZORC_MCP_PENDING_ACTIONS_PATH",
 
 PUBLIC_PATHS = {"/health", "/ready", "/version"}
 
+# Every mutating tool checks its own rate limit through this one
+# function -- a single place to disable all of them at once for a given
+# deployment (ZORC_MCP_RATE_LIMITS_DISABLED=1) without deleting the
+# mechanism itself. Off by default only where explicitly set; the
+# framework's own default is enabled.
+RATE_LIMITS_ENABLED = os.environ.get("ZORC_MCP_RATE_LIMITS_DISABLED", "").strip().lower() not in ("1", "true", "yes")
+
+
+def _rate_limited(timestamps: deque, limit: int, window_sec: float) -> bool:
+    """True if recording one more call right now would exceed limit
+    within the last window_sec seconds. Purges expired entries as a side
+    effect either way -- callers still append their own timestamp on
+    success, this only decides whether to let that happen."""
+    if not RATE_LIMITS_ENABLED:
+        return False
+    now = time.time()
+    while timestamps and now - timestamps[0] > window_sec:
+        timestamps.popleft()
+    return len(timestamps) >= limit
+
 DEPLOY_RATE_LIMIT = 5           # max successful deploys...
 DEPLOY_RATE_WINDOW_SEC = 3600   # ...per this many seconds
 _deploy_timestamps: deque[float] = deque()
@@ -764,9 +784,7 @@ def deploy(ctx: Context, owner_repo: str, name: str, report_id: str, git_branch:
     report = entry["report"]
 
     now = time.time()
-    while _deploy_timestamps and now - _deploy_timestamps[0] > DEPLOY_RATE_WINDOW_SEC:
-        _deploy_timestamps.popleft()
-    if len(_deploy_timestamps) >= DEPLOY_RATE_LIMIT:
+    if _rate_limited(_deploy_timestamps, DEPLOY_RATE_LIMIT, DEPLOY_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {DEPLOY_RATE_LIMIT} deploys per {DEPLOY_RATE_WINDOW_SEC}s exceeded"}
         _audit("deploy", params, outcome, client=caller)
@@ -818,9 +836,7 @@ def redeploy(ctx: Context, name: str, confirm_redeploy: bool = True) -> dict:
         return gate
 
     now = time.time()
-    while _redeploy_timestamps and now - _redeploy_timestamps[0] > REDEPLOY_RATE_WINDOW_SEC:
-        _redeploy_timestamps.popleft()
-    if len(_redeploy_timestamps) >= REDEPLOY_RATE_LIMIT:
+    if _rate_limited(_redeploy_timestamps, REDEPLOY_RATE_LIMIT, REDEPLOY_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {REDEPLOY_RATE_LIMIT} redeploys per {REDEPLOY_RATE_WINDOW_SEC}s exceeded"}
         _audit("redeploy", params, outcome, client=caller)
@@ -852,9 +868,7 @@ def restart(ctx: Context, name: str) -> dict:
         return gate
 
     now = time.time()
-    while _restart_timestamps and now - _restart_timestamps[0] > RESTART_RATE_WINDOW_SEC:
-        _restart_timestamps.popleft()
-    if len(_restart_timestamps) >= RESTART_RATE_LIMIT:
+    if _rate_limited(_restart_timestamps, RESTART_RATE_LIMIT, RESTART_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {RESTART_RATE_LIMIT} restarts per {RESTART_RATE_WINDOW_SEC}s exceeded"}
         _audit("restart", params, outcome, client=caller)
@@ -901,9 +915,7 @@ def set_app_env_vars(ctx: Context, name: str, env_vars: dict[str, str]) -> dict:
         return outcome
 
     now = time.time()
-    while _set_env_timestamps and now - _set_env_timestamps[0] > SET_ENV_RATE_WINDOW_SEC:
-        _set_env_timestamps.popleft()
-    if len(_set_env_timestamps) >= SET_ENV_RATE_LIMIT:
+    if _rate_limited(_set_env_timestamps, SET_ENV_RATE_LIMIT, SET_ENV_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {SET_ENV_RATE_LIMIT} env var updates per "
                              f"{SET_ENV_RATE_WINDOW_SEC}s exceeded"}
@@ -949,9 +961,7 @@ def request_teardown(ctx: Context, name: str) -> dict:
         return gate
 
     now = time.time()
-    while _teardown_request_timestamps and now - _teardown_request_timestamps[0] > TEARDOWN_REQUEST_RATE_WINDOW_SEC:
-        _teardown_request_timestamps.popleft()
-    if len(_teardown_request_timestamps) >= TEARDOWN_REQUEST_RATE_LIMIT:
+    if _rate_limited(_teardown_request_timestamps, TEARDOWN_REQUEST_RATE_LIMIT, TEARDOWN_REQUEST_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {TEARDOWN_REQUEST_RATE_LIMIT} teardown requests per "
                              f"{TEARDOWN_REQUEST_RATE_WINDOW_SEC}s exceeded"}
@@ -1037,10 +1047,7 @@ def request_memory_increase(ctx: Context, name: str, requested_memory_mb: int, r
             return outcome
 
     now = time.time()
-    while (_memory_increase_request_timestamps
-           and now - _memory_increase_request_timestamps[0] > MEMORY_INCREASE_REQUEST_RATE_WINDOW_SEC):
-        _memory_increase_request_timestamps.popleft()
-    if len(_memory_increase_request_timestamps) >= MEMORY_INCREASE_REQUEST_RATE_LIMIT:
+    if _rate_limited(_memory_increase_request_timestamps, MEMORY_INCREASE_REQUEST_RATE_LIMIT, MEMORY_INCREASE_REQUEST_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {MEMORY_INCREASE_REQUEST_RATE_LIMIT} memory increase requests per "
                              f"{MEMORY_INCREASE_REQUEST_RATE_WINDOW_SEC}s exceeded"}
@@ -1100,9 +1107,7 @@ def approve_action(ctx: Context, id: str) -> dict:
         return outcome
 
     now = time.time()
-    while _approve_action_timestamps and now - _approve_action_timestamps[0] > APPROVE_ACTION_RATE_WINDOW_SEC:
-        _approve_action_timestamps.popleft()
-    if len(_approve_action_timestamps) >= APPROVE_ACTION_RATE_LIMIT:
+    if _rate_limited(_approve_action_timestamps, APPROVE_ACTION_RATE_LIMIT, APPROVE_ACTION_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {APPROVE_ACTION_RATE_LIMIT} approvals per "
                              f"{APPROVE_ACTION_RATE_WINDOW_SEC}s exceeded"}
@@ -1161,9 +1166,7 @@ def reject_action(ctx: Context, id: str) -> dict:
         return outcome
 
     now = time.time()
-    while _reject_action_timestamps and now - _reject_action_timestamps[0] > REJECT_ACTION_RATE_WINDOW_SEC:
-        _reject_action_timestamps.popleft()
-    if len(_reject_action_timestamps) >= REJECT_ACTION_RATE_LIMIT:
+    if _rate_limited(_reject_action_timestamps, REJECT_ACTION_RATE_LIMIT, REJECT_ACTION_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {REJECT_ACTION_RATE_LIMIT} rejections per "
                              f"{REJECT_ACTION_RATE_WINDOW_SEC}s exceeded"}
@@ -1236,9 +1239,7 @@ def mint_client_token(ctx: Context, name: str, role: Literal["admin", "client"])
         return outcome
 
     now = time.time()
-    while _mint_token_timestamps and now - _mint_token_timestamps[0] > MINT_TOKEN_RATE_WINDOW_SEC:
-        _mint_token_timestamps.popleft()
-    if len(_mint_token_timestamps) >= MINT_TOKEN_RATE_LIMIT:
+    if _rate_limited(_mint_token_timestamps, MINT_TOKEN_RATE_LIMIT, MINT_TOKEN_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {MINT_TOKEN_RATE_LIMIT} mints per "
                              f"{MINT_TOKEN_RATE_WINDOW_SEC}s exceeded"}
@@ -1280,9 +1281,7 @@ def revoke_client_token(ctx: Context, name: str) -> dict:
         return outcome
 
     now = time.time()
-    while _revoke_token_timestamps and now - _revoke_token_timestamps[0] > REVOKE_TOKEN_RATE_WINDOW_SEC:
-        _revoke_token_timestamps.popleft()
-    if len(_revoke_token_timestamps) >= REVOKE_TOKEN_RATE_LIMIT:
+    if _rate_limited(_revoke_token_timestamps, REVOKE_TOKEN_RATE_LIMIT, REVOKE_TOKEN_RATE_WINDOW_SEC):
         outcome = {"status": "rejected",
                    "reason": f"rate limit: {REVOKE_TOKEN_RATE_LIMIT} revocations per "
                              f"{REVOKE_TOKEN_RATE_WINDOW_SEC}s exceeded"}
